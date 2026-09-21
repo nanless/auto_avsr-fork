@@ -7,6 +7,15 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
+EXPECTED_COUNTS = {"pretrain": 118_516, "trainval": 31_982, "test": 1_321}
+
+
+def landmark_counts(root: Path) -> dict[str, int]:
+    return {
+        split: sum(1 for _ in (root / split).rglob("*.pkl"))
+        for split in EXPECTED_COUNTS
+    }
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -20,10 +29,13 @@ def main() -> None:
     destination = output_root / "LRS3_landmarks"
 
     if destination.exists():
-        count = sum(1 for _ in destination.rglob("*.pkl"))
-        if count < 151_000:
-            raise RuntimeError(f"existing landmark directory is incomplete: {count}")
-        print(f"LRS3_LANDMARKS_ALREADY_EXTRACTED count={count}")
+        counts = landmark_counts(destination)
+        if counts != EXPECTED_COUNTS:
+            raise RuntimeError(
+                f"existing landmark directory has unexpected counts: {counts}; "
+                f"expected {EXPECTED_COUNTS}"
+            )
+        print(f"LRS3_LANDMARKS_ALREADY_EXTRACTED counts={counts}")
         return
 
     temporary = Path(tempfile.mkdtemp(prefix=".lrs3-landmarks-", dir=output_root))
@@ -47,12 +59,12 @@ def main() -> None:
         if len(candidates) != 1:
             raise RuntimeError(f"expected one landmark root, got {candidates}")
         source = candidates[0]
-        counts = {
-            split: sum(1 for _ in (source / split).rglob("*.pkl"))
-            for split in ("pretrain", "trainval", "test")
-        }
-        if sum(counts.values()) < 151_000:
-            raise RuntimeError(f"landmark archive is incomplete: {counts}")
+        counts = landmark_counts(source)
+        if counts != EXPECTED_COUNTS:
+            raise RuntimeError(
+                f"landmark archive has unexpected counts: {counts}; "
+                f"expected {EXPECTED_COUNTS}"
+            )
         source.replace(destination)
         print(f"LRS3_LANDMARKS_OK counts={counts}")
     finally:
