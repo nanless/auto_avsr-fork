@@ -12,19 +12,18 @@ import torchvision
 class AVSRDataLoader:
     def __init__(self, modality, detector="retinaface", convert_gray=True, gpu_type="cuda"):
         self.modality = modality
+        self.detector = detector
+        self.gpu_type = gpu_type
+        self.landmarks_detector = None
         if modality == "video":
             if detector == "retinaface":
-                from detectors.retinaface.detector import LandmarksDetector
                 from detectors.retinaface.video_process import VideoProcess
 
-                self.landmarks_detector = LandmarksDetector(device=gpu_type+":0")
                 self.video_process = VideoProcess(convert_gray=convert_gray)
 
             if detector == "mediapipe":
-                from detectors.mediapipe.detector import LandmarksDetector
                 from detectors.mediapipe.video_process import VideoProcess
 
-                self.landmarks_detector = LandmarksDetector()
                 self.video_process = VideoProcess(convert_gray=convert_gray)
 
     def load_data(self, data_filename, landmarks=None, transform=True):
@@ -34,7 +33,20 @@ class AVSRDataLoader:
             return audio
         if self.modality == "video":
             video = self.load_video(data_filename)
-            if not landmarks:
+            if landmarks is None:
+                if self.landmarks_detector is None:
+                    if self.detector == "retinaface":
+                        from detectors.retinaface.detector import LandmarksDetector
+
+                        self.landmarks_detector = LandmarksDetector(
+                            device=self.gpu_type + ":0"
+                        )
+                    elif self.detector == "mediapipe":
+                        from detectors.mediapipe.detector import LandmarksDetector
+
+                        self.landmarks_detector = LandmarksDetector()
+                    else:
+                        raise ValueError(f"Unsupported detector: {self.detector}")
                 landmarks = self.landmarks_detector(video)
             video = self.video_process(video, landmarks)
             if video is None:
