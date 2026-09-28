@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="${REPO_ROOT:-/root/code/github_repos/auto_avsr}"
+REPO_ROOT="${REPO_ROOT:-/root/code/github_repos/auto_avsr-fork}"
 LANDMARK_ROOT="${LANDMARK_ROOT:-/root/group-shared/voiceprint/data/multimodal/multimodal/audio-visual/derived/avsr_reproduction/auto_avsr_landmarks}"
 ARCHIVE="${ARCHIVE:-${LANDMARK_ROOT}/LRS3_landmarks.zip}"
 LOG_ROOT="${LOG_ROOT:-/root/code/github_repos/avsr_download_logs}"
@@ -36,7 +36,7 @@ if [[ -s "${PREP_PID_FILE}" ]] && kill -0 "$(cat "${PREP_PID_FILE}")" 2>/dev/nul
 fi
 
 nohup bash -c \
-  'WORKERS=24 /root/code/github_repos/auto_avsr/scripts/prepare_mms_lrs3.sh && touch /root/code/github_repos/avsr_download_logs/mms-lrs3-24s-preparation.complete' \
+  'WORKERS=24 /root/code/github_repos/auto_avsr-fork/scripts/prepare_mms_lrs3.sh && touch /root/code/github_repos/avsr_download_logs/mms-lrs3-24s-preparation.complete' \
   >"${PREP_LOG}" 2>&1 &
 echo $! >"${PREP_PID_FILE}"
 echo "STARTED MMS LRS3 preparation pid=$!"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="${REPO_ROOT:-/root/code/github_repos/auto_avsr}"
+REPO_ROOT="${REPO_ROOT:-/root/code/github_repos/auto_avsr-fork}"
 RAW_ROOT="${RAW_ROOT:-/root/group-shared/voiceprint/data/multimodal/multimodal/audio-visual/preprocessed_data/lrs3}"
 LANDMARKS_ROOT="${LANDMARKS_ROOT:-/root/group-shared/voiceprint/data/multimodal/multimodal/audio-visual/derived/avsr_reproduction/auto_avsr_landmarks/LRS3_landmarks}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/root/group-shared/voiceprint/data/multimodal/multimodal/audio-visual/derived/avsr_reproduction/mms_lrs3_24s}"
