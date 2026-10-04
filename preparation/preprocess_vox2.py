@@ -10,6 +10,33 @@ from data.data_module import AVSRDataLoader
 from tqdm import tqdm
 from utils import save_vid_aud
 
+
+def _segment_is_complete(path):
+    """True only when a previously written segment is actually usable.
+
+    The resume probe used to be `os.path.exists`, but the segment writer
+    (torchvision.io.write_video) opens the FINAL path directly, so a worker killed
+    mid-encode leaves a truncated mp4 behind.  Existence then reads as success and
+    the clip is skipped forever, silently shrinking the corpus with no way to
+    repair it short of deleting the file by hand.  Require a decodable video
+    stream of non-zero duration instead.
+    """
+    if not os.path.exists(path):
+        return False
+    if os.path.getsize(path) < 1024:
+        return False
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=60).stdout.strip()
+        return bool(out) and float(out.splitlines()[0]) > 0
+    except Exception:
+        return False
+
+
+
 warnings.filterwarnings("ignore")
 
 # Argument parsing
@@ -105,6 +132,12 @@ unit = math.ceil(len(filenames) / args.groups)
 files_to_process = filenames[args.job_index * unit : (args.job_index + 1) * unit]
 
 for vid_filename in tqdm(files_to_process):
+    # Resume support: a run that was interrupted (or a worker restarted after a
+    # crash) must not redo clips whose first segment already exists.  Only the
+    # bookkeeping changes -- the per-frame RetinaFace/FAN path is untouched.
+    _probe = f"{vid_filename.replace(args.vid_dir, dst_vid_dir)[:-4]}_00.mp4"
+    if _segment_is_complete(_probe):
+        continue
     if args.landmarks_dir:
         landmarks_filename = (
             vid_filename.replace(args.vid_dir, args.landmarks_dir)[:-4] + ".pkl"
@@ -116,7 +149,15 @@ for vid_filename in tqdm(files_to_process):
         video_data = vid_dataloader.load_data(vid_filename, landmarks)
         aud_filename = vid_filename.replace(args.vid_dir, args.aud_dir)[:-4] + ".wav"
         audio_data = aud_dataloader.load_data(aud_filename)
-    except (UnboundLocalError, TypeError, OverflowError, AssertionError):
+    except (
+        UnboundLocalError,
+        TypeError,
+        OverflowError,
+        AssertionError,
+        RuntimeError,      # torchaudio/ffmpeg raise this for unreadable or missing media
+        OSError,           # missing file on the filesystem
+        ValueError,
+    ):
         continue
     if video_data is None:
         continue
