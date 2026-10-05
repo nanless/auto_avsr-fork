@@ -1,8 +1,10 @@
 import argparse
+import json
 import math
 import os
 import pickle
 import shutil
+import sys
 import warnings
 
 import ffmpeg
@@ -131,12 +133,32 @@ filenames = [
 unit = math.ceil(len(filenames) / args.groups)
 files_to_process = filenames[args.job_index * unit : (args.job_index + 1) * unit]
 
+# The widened except below is deliberate -- AVSpeech sources are YouTube scrapes
+# and some really are unreadable -- but a bare `continue` made a SYSTEMATIC
+# failure indistinguishable from a clean run: every clip skipped, no output, and
+# the process still exited 0.  Record every skip with its cause and report
+# counts at the end so a shrinking corpus is visible.
+_skip_log = open(os.path.join(args.root_dir, f"skipped_job{args.job_index}.jsonl"), "a", encoding="utf-8")
+_n_done = _n_skipped = _n_segments = 0
+_skip_reasons = {}
+
+def _record_skip(clip, reason, detail=""):
+    global _n_skipped
+    _n_skipped += 1
+    _skip_reasons[reason] = _skip_reasons.get(reason, 0) + 1
+    _skip_log.write(json.dumps({
+        "clip": os.path.relpath(clip, args.vid_dir) if clip.startswith(args.vid_dir) else clip,
+        "reason": reason, "detail": detail[:300],
+    }, ensure_ascii=False) + "\n")
+    _skip_log.flush()
+
 for vid_filename in tqdm(files_to_process):
     # Resume support: a run that was interrupted (or a worker restarted after a
     # crash) must not redo clips whose first segment already exists.  Only the
     # bookkeeping changes -- the per-frame RetinaFace/FAN path is untouched.
     _probe = f"{vid_filename.replace(args.vid_dir, dst_vid_dir)[:-4]}_00.mp4"
     if _segment_is_complete(_probe):
+        _n_done += 1
         continue
     if args.landmarks_dir:
         landmarks_filename = (
@@ -157,9 +179,11 @@ for vid_filename in tqdm(files_to_process):
         RuntimeError,      # torchaudio/ffmpeg raise this for unreadable or missing media
         OSError,           # missing file on the filesystem
         ValueError,
-    ):
+    ) as _exc:
+        _record_skip(vid_filename, type(_exc).__name__, repr(_exc))
         continue
     if video_data is None:
+        _record_skip(vid_filename, "video_data_none")
         continue
 
     # Process segments
@@ -170,6 +194,7 @@ for vid_filename in tqdm(files_to_process):
         dst_aud_filename = (
             f"{aud_filename.replace(args.aud_dir, dst_vid_dir)[:-4]}_{i:02d}.wav"
         )
+        _n_segments += 1
         trim_video_data = video_data[start_idx : start_idx + seg_vid_len]
         trim_audio_data = audio_data[
             :, start_idx * 640 : (start_idx + seg_vid_len) * 640
@@ -212,3 +237,19 @@ for vid_filename in tqdm(files_to_process):
             os.remove(dst_aud_filename)
             os.remove(dst_vid_filename)
             shutil.move(dst_vid_filename[:-4] + ".m.mp4", dst_vid_filename)
+
+_skip_log.close()
+_summary = {
+    "job_index": args.job_index,
+    "input_clips": len(files_to_process),
+    "already_complete": _n_done,
+    "skipped": _n_skipped,
+    "segments_written": _n_segments,
+    "skip_reasons": dict(sorted(_skip_reasons.items(), key=lambda kv: -kv[1])),
+}
+print("PREPROCESS_SUMMARY " + json.dumps(_summary, ensure_ascii=False), flush=True)
+
+# A run that skipped everything is a failure, not a success.  Exit non-zero so the
+# pipeline's wait_pids sees it.
+if _n_segments == 0 and _n_done == 0:
+    sys.exit(3)
