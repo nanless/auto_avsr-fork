@@ -139,7 +139,7 @@ files_to_process = filenames[args.job_index * unit : (args.job_index + 1) * unit
 # the process still exited 0.  Record every skip with its cause and report
 # counts at the end so a shrinking corpus is visible.
 _skip_log = open(os.path.join(args.root_dir, f"skipped_job{args.job_index}.jsonl"), "a", encoding="utf-8")
-_n_done = _n_skipped = _n_segments = 0
+_n_done = _n_skipped = _n_segments = _n_attempted = 0
 _skip_reasons = {}
 
 def _record_skip(clip, reason, detail=""):
@@ -194,12 +194,19 @@ for vid_filename in tqdm(files_to_process):
         dst_aud_filename = (
             f"{aud_filename.replace(args.aud_dir, dst_vid_dir)[:-4]}_{i:02d}.wav"
         )
-        _n_segments += 1
+        # NOTE: do NOT count here.  This loop iterates over candidate 16 s windows,
+        # not over segments actually written, so incrementing before the gates made
+        # `segments_written` overstate the output -- a clip that loaded but wrote
+        # nothing still reported segments_written > 0, recorded no skip, and passed
+        # the `_n_segments == 0 and _n_done == 0` guard below.  A multi-agent audit
+        # found 11 already-processed clips lost that way with no trace anywhere.
+        _n_attempted += 1
         trim_video_data = video_data[start_idx : start_idx + seg_vid_len]
         trim_audio_data = audio_data[
             :, start_idx * 640 : (start_idx + seg_vid_len) * 640
         ]
         if trim_video_data is None or trim_audio_data is None:
+            _record_skip(vid_filename, "segment_slice_none", f"index={i}")
             continue
         video_length = len(trim_video_data)
         audio_length = trim_audio_data.size(1)
@@ -208,6 +215,15 @@ for vid_filename in tqdm(files_to_process):
             or audio_length / video_length > 720.0
             or video_length < 12
         ):
+            # Record it: without this the clip vanished with no skip record and no
+            # segment, so a systematic short-audio regression would shrink the
+            # corpus while every worker exited 0 and every gate reported success.
+            _record_skip(
+                vid_filename,
+                "ratio_gate",
+                f"index={i} audio={audio_length} video={video_length} "
+                f"ratio={audio_length / max(video_length, 1):.1f}",
+            )
             continue
 
         # Save video and audio
@@ -219,6 +235,9 @@ for vid_filename in tqdm(files_to_process):
             video_fps=25,
             audio_sample_rate=16000,
         )
+        # Count only segments actually written, so the summary and the
+        # `_n_segments == 0` guard describe real output.
+        _n_segments += 1
 
         # Merge video and audio
         if args.combine_av:
@@ -245,6 +264,7 @@ _summary = {
     "already_complete": _n_done,
     "skipped": _n_skipped,
     "segments_written": _n_segments,
+    "segments_attempted": _n_attempted,
     "skip_reasons": dict(sorted(_skip_reasons.items(), key=lambda kv: -kv[1])),
 }
 print("PREPROCESS_SUMMARY " + json.dumps(_summary, ensure_ascii=False), flush=True)
