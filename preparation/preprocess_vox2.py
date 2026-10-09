@@ -13,6 +13,55 @@ from tqdm import tqdm
 from utils import save_vid_aud
 
 
+def _clip_is_complete(vid_filename, dst_vid_dir):
+    """True only when EVERY segment index of a clip is a complete video+audio PAIR.
+
+    The probe used to check just `<clip>_00.mp4`.  Two gaps followed from that:
+
+      * save_vid_aud writes the video and then the audio straight to their final
+        names (no .part + rename), so a worker killed between the two writes
+        leaves a decodable `_00.mp4` with no wav.  Every later resume counted the
+        whole clip as done and the incomplete pair could never be repaired.
+      * any index above 0 was never checked at all, so a torn `_01.mp4` was
+        invisible too.
+
+    Scan the mirror directory for every `<clip>_NN.mp4`, require the matching
+    `.wav`, and validate each with _segment_is_complete.  A clip with no segments
+    at all is not complete (it still needs work).
+    """
+    import glob as _glob
+    base = vid_filename.replace(args.vid_dir, dst_vid_dir)[:-4]
+    vids = sorted(_glob.glob(_glob.escape(base) + "_[0-9][0-9].mp4"))
+    if not vids:
+        return False
+    for v in vids:
+        w = v[:-4] + ".wav"
+        if not os.path.exists(w) or os.path.getsize(w) < 1024:
+            return False
+        if not _segment_is_complete(v):
+            return False
+        if not _segment_is_complete_audio(w):
+            return False
+    return True
+
+
+def _segment_is_complete_audio(path):
+    """Same idea as _segment_is_complete, for the wav half of a segment pair."""
+    if not os.path.exists(path):
+        return False
+    if os.path.getsize(path) < 1024:
+        return False
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=duration", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=60).stdout.strip()
+        return bool(out) and float(out.splitlines()[0]) > 0
+    except Exception:
+        return False
+
+
 def _segment_is_complete(path):
     """True only when a previously written segment is actually usable.
 
@@ -156,8 +205,7 @@ for vid_filename in tqdm(files_to_process):
     # Resume support: a run that was interrupted (or a worker restarted after a
     # crash) must not redo clips whose first segment already exists.  Only the
     # bookkeeping changes -- the per-frame RetinaFace/FAN path is untouched.
-    _probe = f"{vid_filename.replace(args.vid_dir, dst_vid_dir)[:-4]}_00.mp4"
-    if _segment_is_complete(_probe):
+    if _clip_is_complete(vid_filename, dst_vid_dir):
         _n_done += 1
         continue
     if args.landmarks_dir:
